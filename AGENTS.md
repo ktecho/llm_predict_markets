@@ -36,10 +36,11 @@ trading.
 - **Four backends** in `src/models.py`, selected via `MODEL_REGISTRY` and a
   `backend` field ("timesfm" | "moirai" | "kronos" | "chronos2");
   `load_predictor()` dispatches on it.
-- **TimesFM 2.5** (`google/timesfm-2.5-200m-pytorch`, 200M), Apache-2.0. It is a
-  **univariate point-forecast** model, but its `forecast()` accepts several
-  series in one batched call: `TimesFMPredictor` forecasts **open, high, low,
-  close, volume** as five independent series in a single forward pass.
+- **TimesFM 3.0** (`google/timesfm-3.0-pytorch`, 330M, non-commercial). A
+  **native multivariate** foundation model via variate attention: `TimesFMPredictor`
+  feeds all five OHLCV variates as one multivariate target `(5, context_length)`
+  and forecasts them jointly in a single forward pass; the 0.5 quantile is the
+  point forecast.
 - **Moirai 1.1-R** (`Salesforce/moirai-1.1-R-{small,base,large}`), CC-BY-NC-4.0.
   A **truly multivariate probabilistic** model: `MoiraiPredictor` feeds all five
   OHLCV variates as one GluonTS series (`target_dim=5`, via
@@ -59,11 +60,11 @@ trading.
   `high >= max(open,close)`, `low <= min(open,close)`, `volume >= 0` and
   `amount = volume * mean price`, returning a DataFrame indexed by future
   timestamps with columns `open, high, low, close, volume, amount`.
-- **Model registry** (`src/models.py`): `2.5` (timesfm, max_context=1024),
-  `moirai-small`/`base`/`large` (max_context=512, num_samples 20/10/10),
-  `kronos-mini`/`small`/`base` (max_context 2048/512/512) and `chronos2`
-  (max_context=2048, max_horizon=1024). TimesFM patches context in windows of
-  32, so the lookback slider uses multiples of 32.
+- **Model registry** (`src/models.py`): `3.0` (timesfm, max_context=2048,
+  16k supported, max_horizon=512), `moirai-small`/`base`/`large`
+  (max_context=512, num_samples 20/10/10), `kronos-mini`/`small`/`base`
+  (max_context 2048/512/512) and `chronos2` (max_context=2048, max_horizon=1024).
+  TimesFM uses input patches of 32, so the lookback slider uses multiples of 32.
 - **Devices**: CPU by default; GPU if a CUDA (NVIDIA) torch build is installed.
   The UI offers whatever `available_devices()` detects — `cpu`, `cuda`, `xpu`
   (Intel GPU), `npu` (Intel NPU via OpenVINO) and `mps` (Apple Silicon).

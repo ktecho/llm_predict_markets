@@ -1,7 +1,7 @@
 # TimesFM · Moirai · Kronos · Chronos-2 Price Predictor
 
 Local price prediction app (OHLCV candles) using Google's
-[**TimesFM**](https://github.com/google-research/timesfm) (Apache-2.0),
+[**TimesFM**](https://github.com/google-research/timesfm) (330M, non-commercial),
 Salesforce's [**Moirai**](https://github.com/SalesforceAIResearch/uni2ts)
 (CC-BY-NC-4.0), [**Kronos**](https://github.com/shiyu-coder/Kronos)
 (Apache-2.0) or Amazon's [**Chronos-2**](https://github.com/amazon-science/chronos-forecasting)
@@ -13,7 +13,7 @@ Salesforce's [**Moirai**](https://github.com/SalesforceAIResearch/uni2ts)
 - Downloads OHLCV series from Yahoo Finance by **ticker** and **timeframe**
   (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk).
 - **Four interchangeable foundation models** (sidebar):
-  - **TimesFM 2.5** — `200M` params, point forecast, Apache-2.0.
+  - **TimesFM 3.0** — `330M` params, native **multivariate** (non-commercial).
   - **Moirai 1.1-R** — `small`/`base`/`large` (14M/91M/311M), probabilistic and
     truly **multivariate** (forecasts all OHLCV variates together).
   - **Kronos** — `mini`/`small`/`base` (4.1M/24.7M/102.3M), **generative** with
@@ -32,9 +32,9 @@ Salesforce's [**Moirai**](https://github.com/SalesforceAIResearch/uni2ts)
 All four models feed the five OHLCV series (**open, high, low, close, volume**)
 and return a forecast for each candle:
 
-- **TimesFM** is a univariate point-forecast model; its `forecast()` accepts
-  several series in one batched call, so the five series are forecast
-  independently in a single forward pass.
+- **TimesFM 3.0** is a native **multivariate** model with variate attention; it
+  forecasts the five OHLCV series **jointly** in a single forward pass (the 0.5
+  quantile is the point forecast).
 - **Moirai** is a multivariate probabilistic transformer; it forecasts all five
   variates **jointly** (one series with `target_dim = 5`), so cross-series
   correlation is modeled. The median over sampled trajectories is used as the
@@ -99,10 +99,10 @@ All parameters are set in the sidebar:
 
 | Parameter | What it does |
 |---|---|
-| **Foundation model** | `TimesFM-2.5` (point forecast), `Moirai small/base/large` (probabilistic + true multivariate), `Kronos mini/small/base` (generative) or `Chronos-2` (quantile-based, Amazon). Default: `moirai-base`. |
+| **Foundation model** | `TimesFM-3.0` (330M, native multivariate), `Moirai small/base/large` (probabilistic + true multivariate), `Kronos mini/small/base` (generative) or `Chronos-2` (quantile-based, Amazon). Default: `moirai-base`. |
 | **Compute device** | Auto-detected from torch and offered in the sidebar: `cpu`, `cuda` (NVIDIA GPU), `xpu` (Intel GPU), `npu` (Intel NPU via OpenVINO) and `mps` (Apple Silicon). TimesFM/Moirai/Chronos-2 only accelerate on `cuda` and fall back to CPU otherwise; **Kronos can also use `xpu`/`mps`, and the `npu` via OpenVINO**. |
 | **Mode** | `Forecast`: predicts the next N candles into the future. `Backtest`: predicts a known historical window and compares it against reality with metrics (MAE, RMSE, MAPE, directional accuracy) — use this to judge whether the model works for your ticker/timeframe before trusting a forecast. |
-| **Lookback** | Number of past candles fed as context (multiples of 32; up to 1024 for TimesFM, 512 for Moirai, 2048 for Kronos-mini/Chronos-2). More context = more information, but slower. |
+| **Lookback** | Number of past candles fed as context (multiples of 32; up to 2048 for TimesFM/Kronos-mini/Chronos-2, 512 for Moirai/Kronos-small/base). More context = more information, but slower (TimesFM 3.0 supports up to 16k). |
 | **Candles to predict / Backtest candles** | Prediction horizon (`pred_len`, max 240): how many candles the model generates. Longer horizons are slower and less reliable. |
 | **Temperature (T)** | *(Kronos only)* Sampling temperature: `1.0` is neutral, lower = more conservative, higher = more varied paths. |
 | **Top-p** | *(Kronos only)* Nucleus sampling threshold: probability mass kept at each token step. |
@@ -253,11 +253,11 @@ tests/              # unit tests (no network, no model)
 
 - **No model predicts the market reliably**; backtests are meant to assess
   forecast quality for each specific ticker/timeframe.
-- Moirai weights are licensed **CC-BY-NC-4.0** (non-commercial); TimesFM,
+- Moirai and TimesFM 3.0 weights are licensed **CC-BY-NC-4.0** / **non-commercial**;
   Kronos and Chronos-2 are Apache-2.0.
 - `open/high/low/close/volume` are reconciled so `high`/`low` always enclose the
-  `open`/`close` body. TimesFM forecasts each series independently; Moirai and
-  Chronos-2 forecast them jointly; Kronos samples them as a sequence.
+  `open`/`close` body. TimesFM 3.0, Moirai and Chronos-2 forecast them jointly;
+  Kronos samples them as a sequence.
 - Future timestamps use a fixed frequency: exact for crypto (24/7),
   approximate for stocks (nights/weekends).
 - yfinance is an unofficial API: limited intraday history (e.g. 1m ≈ 7 days,

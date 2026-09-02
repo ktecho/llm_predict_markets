@@ -2,10 +2,10 @@
 
 Four time-series foundation models are supported, selected from the UI:
 
-- **TimesFM 2.5** (``google/timesfm-2.5-200m-pytorch``, 200M, Apache-2.0): a
-  univariate point-forecast model. Its ``forecast()`` accepts several series in
-  one batched call, so this app forecasts open/high/low/close/volume
-  independently in a single forward pass.
+- **TimesFM 3.0** (``google/timesfm-3.0-pytorch``, 330M, non-commercial): a
+  multivariate foundation model. Unlike 2.5 (univariate), it forecasts all five
+  OHLCV variates jointly in one forward pass via variate attention, with native
+  support for up to 15360 context length.
 - **Moirai** (``Salesforce/moirai-1.1-R-*``, 14M/91M/311M, CC-BY-NC-4.0): a
   truly multivariate probabilistic transformer that forecasts all variates
   jointly in one forward pass, capturing cross-series correlation. Loaded via
@@ -40,8 +40,9 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# TimesFM 2.5 patches the context into windows of `input_patch_len` (32).
-# Context/inputs must be a multiple of this.
+# TimesFM 3.0 uses input_patch_len=32 (and output_patch_len=64).
+# The forecaster handles padding/stitching internally, but the UI still steps
+# lookback by 32 for consistency with the original patch constraint.
 PATCH_LEN = 32
 
 # OHLCV variates shared by all backends (column order).
@@ -65,15 +66,15 @@ class ModelConfig:
 
 
 MODEL_REGISTRY: dict[str, ModelConfig] = {
-    "2.5": ModelConfig(
-        name="2.5",
+    "3.0": ModelConfig(
+        name="3.0",
         backend="timesfm",
-        hf_model_id="google/timesfm-2.5-200m-pytorch",
-        max_context=1024,
-        max_horizon=256,
-        params="200M",
-        description="TimesFM 2.5 (200M, Apache-2.0). Point forecast; each OHLCV "
-                    "series forecast independently in one batched call.",
+        hf_model_id="google/timesfm-3.0-pytorch",
+        max_context=2048,
+        max_horizon=512,
+        params="330M",
+        description="TimesFM 3.0 (330M, non-commercial). Native multivariate; "
+                    "all OHLCV variates forecast jointly in one pass (16k context supported).",
     ),
     "moirai-small": ModelConfig(
         name="moirai-small",
@@ -291,14 +292,14 @@ def _build_candles(
 
 
 class TimesFMPredictor:
-    """Wraps TimesFM and exposes a predictor-compatible ``predict()`` interface.
+    """Wraps TimesFM 3.0 and exposes a predictor-compatible ``predict()`` interface.
 
-    TimesFM is a univariate point-forecast model, but its ``forecast()`` method
-    accepts several series in a single batched call. This app forecasts the
-    five OHLCV series (**open, high, low, close, volume**) independently in one
-    forward pass and then reconciles each candle so the geometry is consistent:
+    TimesFM 3.0 is a **native multivariate** foundation model (330M, non-commercial).
+    It forecasts all five OHLCV variates jointly via variate attention in a single
+    forward pass, capturing cross-series correlation. The median quantile (0.5) is
+    used as the point forecast; candle geometry is reconciled afterwards:
 
-    - ``open`` / ``close``: TimesFM point forecasts.
+    - ``open`` / ``close``: TimesFM 3.0 point forecasts.
     - ``high`` = max(hi_forecast, open, close).
     - ``low``  = min(lo_forecast, open, close).
     - ``volume``: TimesFM forecast, clamped at >= 0.
@@ -308,11 +309,8 @@ class TimesFMPredictor:
     ``open, high, low, close, volume, amount``.
     """
 
-    # Column name -> position in the batched ``inputs`` list.
-    _SERIES = ["open", "high", "low", "close", "volume"]
-
-    def __init__(self, model, max_context: int):
-        self.model = model
+    def __init__(self, forecaster, max_context: int):
+        self.forecaster = forecaster
         self.max_context = max_context
 
     def predict(
@@ -329,17 +327,36 @@ class TimesFMPredictor:
         """Predicts ``pred_len`` candles from the OHLCV context ``df``.
 
         ``temperature``/``top_p``/``sample_count`` are accepted for a uniform
-        interface across backends but are ignored (TimesFM is deterministic).
+        interface across backends but are ignored (TimesFM is deterministic,
+        quantile-based).
         """
         if pred_len < 1:
             raise ValueError(f"pred_len must be >= 1, got {pred_len}.")
         if len(df) < 2:
             raise ValueError("At least 2 context candles are required.")
 
-        inputs = [df[c].to_numpy(dtype=np.float64) for c in self._SERIES]
-        point, _ = self.model.forecast(horizon=int(pred_len), inputs=inputs)
-        pred = np.asarray(point, dtype=np.float64)  # shape (5, pred_len)
+        # Multivariate target: (num_variates=5, context_length)
+        target = np.stack(
+            [df[c].to_numpy(dtype=np.float32) for c in OHLCV]
+        )
+        outputs = list(
+            self.forecaster.predict_batch(
+                contexts=[target],
+                horizon=int(pred_len),
+            )
+        )
+        forecast = outputs[0].forecast
+        if forecast is None:
+            raise RuntimeError("TimesFM 3.0 returned no forecast.")
+        pred = np.asarray(forecast, dtype=np.float64)  # shape (5, pred_len)
 
+        # Handle both (5, pred_len) and (pred_len,) edge cases
+        if pred.ndim == 1:
+            # Should not happen for multivariate (5 variates), but guard
+            raise RuntimeError(
+                f"Unexpected univariate forecast shape {pred.shape}; "
+                f"expected (5, {pred_len})."
+            )
         f_open, f_high, f_low, f_close, f_volume = pred
         return _build_candles(f_open, f_high, f_low, f_close, f_volume, y_timestamp)
 
@@ -529,22 +546,15 @@ class Chronos2Predictor:
 
 
 def _load_timesfm(cfg: ModelConfig, device: str):
-    import timesfm  # noqa: PLC0415
+    from timesfm3 import ModelConfig as TimesFM3Config, TimesFM3Forecaster  # noqa: PLC0415
 
-    model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(cfg.hf_model_id)
-    model.compile(
-        timesfm.ForecastConfig(
-            max_context=cfg.max_context,
-            max_horizon=cfg.max_horizon,
-            normalize_inputs=True,
-            use_continuous_quantile_head=True,
-            force_flip_invariance=True,
-            infer_is_positive=True,
-            fix_quantile_crossing=True,
-        )
+    tcfg = TimesFM3Config(
+        checkpoint_path=cfg.hf_model_id,
+        device=device,
+        per_core_batch_size=32,
     )
-    model.model.eval()
-    return TimesFMPredictor(model, max_context=cfg.max_context)
+    forecaster = TimesFM3Forecaster(tcfg)
+    return TimesFMPredictor(forecaster, max_context=cfg.max_context)
 
 
 def _load_moirai(cfg: ModelConfig, device: str):

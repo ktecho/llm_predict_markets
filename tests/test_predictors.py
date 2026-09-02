@@ -1,8 +1,8 @@
 """Unit tests for the model registry and the predictors.
 
-These tests neither download weights nor hit the network: TimesFM is exercised
-through a fake model, Kronos and Chronos-2 through fake vendored predictors,
-and the registry is checked for all four backends.
+These tests neither download weights nor hit the network: TimesFM 3.0 is
+exercised through a fake forecaster, Kronos and Chronos-2 through fake
+vendored predictors, and the registry is checked for all four backends.
 """
 
 import numpy as np
@@ -32,19 +32,34 @@ def _frame(n: int = 96) -> pd.DataFrame:
     })
 
 
-class _FakeModel:
-    """Mimics ``TimesFM_2p5_200M_torch.forecast`` returning (5, horizon)."""
+class _FakeForecaster:
+    """Mimics ``TimesFM3Forecaster.predict_batch`` returning (5, horizon)."""
 
-    def forecast(self, horizon, inputs):
-        k = len(inputs)
-        pred = np.stack([
-            inputs[i][-1] * (1 + 0.01 * np.arange(horizon)) for i in range(k)
-        ])
-        return pred, np.ones((k, horizon, 10))
+    def predict_batch(self, contexts, horizon, **kwargs):
+        # contexts: list of (num_variates, context_len) arrays
+        import dataclasses
+
+        @dataclasses.dataclass
+        class _Out:
+            forecast: np.ndarray
+            quantiles: np.ndarray | None = None
+            ts_id: str | None = None
+
+        for ctx in contexts:
+            ctx = np.asarray(ctx)
+            if ctx.ndim == 1:
+                ctx = ctx[None, :]
+            n_vars = ctx.shape[0]
+            pred = np.stack([
+                ctx[i, -1] * (1 + 0.01 * np.arange(horizon, dtype=np.float64))
+                for i in range(n_vars)
+            ])
+            # Mimic (num_variates, horizon) forecast from TimesFM 3.0
+            yield _Out(forecast=pred)
 
 
 def test_timesfm_predictor_candles():
-    p = TimesFMPredictor(_FakeModel(), max_context=1024)
+    p = TimesFMPredictor(_FakeForecaster(), max_context=2048)
     x_timestamp = pd.date_range("2024-01-01", periods=96, freq="1h")
     y_timestamp = pd.date_range("2024-01-05", periods=12, freq="1h")
     out = p.predict(_frame(96), x_timestamp, y_timestamp, pred_len=12)
@@ -63,14 +78,15 @@ def test_timesfm_predictor_candles():
 def test_registry_has_all_backends():
     backends = {cfg.backend for cfg in MODEL_REGISTRY.values()}
     assert backends == {"timesfm", "moirai", "kronos", "chronos2"}
-    assert "2.5" in MODEL_REGISTRY
+    assert "3.0" in MODEL_REGISTRY
     assert "moirai-small" in MODEL_REGISTRY
     assert "moirai-base" in MODEL_REGISTRY
     assert "kronos-mini" in MODEL_REGISTRY
     assert "kronos-small" in MODEL_REGISTRY
     assert "kronos-base" in MODEL_REGISTRY
     assert "chronos2" in MODEL_REGISTRY
-    assert MODEL_REGISTRY["2.5"].backend == "timesfm"
+    assert MODEL_REGISTRY["3.0"].backend == "timesfm"
+    assert MODEL_REGISTRY["3.0"].hf_model_id == "google/timesfm-3.0-pytorch"
     assert MODEL_REGISTRY["kronos-small"].backend == "kronos"
     assert MODEL_REGISTRY["chronos2"].backend == "chronos2"
     assert MODEL_REGISTRY["chronos2"].hf_model_id == "amazon/chronos-2"

@@ -93,8 +93,7 @@ def _normalize(raw: pd.DataFrame) -> pd.DataFrame:
     if "volume" not in df.columns:
         df["volume"] = 0.0
 
-    # amount = volume * approximate mean price (TimesFM only uses close, but
-    # we keep the full OHLCV schema for candles)
+    # amount = volume * approximate mean price
     if "amount" not in df.columns:
         df["amount"] = df["volume"] * (df["open"] + df["high"] + df["low"] + df["close"]) / 4.0
 
