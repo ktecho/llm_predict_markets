@@ -1,4 +1,4 @@
-"""Streamlit app: price prediction with Kronos + Yahoo Finance.
+"""Streamlit app: price prediction with TimesFM + Yahoo Finance.
 
 Run with:  uv run streamlit run app.py
 """
@@ -33,13 +33,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-st.set_page_config(page_title="Kronos Price Predictor", layout="wide")
-st.title("📈 Kronos Price Predictor")
+st.set_page_config(page_title="TimesFM · Moirai · Kronos · Chronos-2 Price Predictor", layout="wide")
+st.title("📈 Foundation-model Price Predictor")
 st.caption(
-    "OHLCV candle prediction with the [Kronos]"
-    "(https://github.com/shiyu-coder/Kronos) foundation model and Yahoo "
-    "Finance data. For research purposes only — not financial advice."
+    "OHLCV candle prediction with Google [TimesFM]"
+    "(https://github.com/google-research/timesfm), Salesforce [Moirai]"
+    "(https://github.com/SalesforceAIResearch/uni2ts), [Kronos]"
+    "(https://github.com/shiyu-coder/Kronos) or Amazon [Chronos-2]"
+    "(https://github.com/amazon-science/chronos-forecasting) and Yahoo Finance "
+    "data. For research purposes only — not financial advice."
 )
+
+
+def model_label(name: str) -> str:
+    """Human-readable label for a model in the registry."""
+    cfg = MODEL_REGISTRY[name]
+    if cfg.backend == "timesfm":
+        return f"TimesFM-{cfg.name} ({cfg.params})"
+    if cfg.backend == "kronos":
+        return f"Kronos {cfg.name.split('-', 1)[1]} ({cfg.params})"
+    if cfg.backend == "chronos2":
+        return f"Chronos-2 ({cfg.params})"
+    # moirai-<size> -> "Moirai <size>"
+    size = cfg.name.split("-", 1)[1]
+    return f"Moirai {size} ({cfg.params})"
 
 
 @st.cache_resource(show_spinner=False)
@@ -78,10 +95,10 @@ with st.sidebar:
 
     st.header("Model")
     model_name = st.selectbox(
-        "Kronos model",
+        "Foundation model",
         list(MODEL_REGISTRY),
         index=list(MODEL_REGISTRY).index(DEFAULT_MODEL),
-        format_func=lambda n: f"{n} ({MODEL_REGISTRY[n].params})",
+        format_func=model_label,
     )
     cfg = MODEL_REGISTRY[model_name]
     st.caption(cfg.description)
@@ -90,13 +107,15 @@ with st.sidebar:
     device = st.selectbox(
         "Compute device", devices, index=0,
         format_func=device_details,
-        help="'xpu' is Intel GPU (Arc/Iris Xe) and requires a torch XPU build "
-             "(see README). If unsure, use cpu.",
+        help="TimesFM/Moirai/Chronos-2 accelerate on a CUDA (NVIDIA) GPU; "
+             "XPU (Intel GPU)/NPU (OpenVINO)/MPS fall back to CPU for them, "
+             "but Kronos can use XPU/MPS natively (NPU via OpenVINO). "
+             "If unsure, use cpu.",
     )
 
     mode = st.radio("Mode", ["Forecast", "Backtest"], horizontal=True)
 
-    lookback_default = min(400, cfg.max_context)
+    lookback_default = min(384, cfg.max_context)
     lookback = st.slider("Lookback (context candles)", 64, cfg.max_context,
                          lookback_default, step=32)
     if mode == "Forecast":
@@ -104,11 +123,18 @@ with st.sidebar:
     else:
         pred_len = st.slider("Backtest candles", 8, 240, 60, step=8)
 
-    st.header("Sampling")
-    temperature = st.slider("Temperature (T)", 0.1, 2.0, 1.0, step=0.1)
-    top_p = st.slider("Top-p", 0.1, 1.0, 0.9, step=0.05)
-    sample_count = st.slider("Sample count", 1, 20, 1,
-                             help="Forecast paths generated and averaged. More samples = smoother prediction, but proportionally slower.")
+    # Sampling controls only affect Kronos (generative token sampling).
+    if cfg.backend == "kronos":
+        st.header("Sampling")
+        temperature = st.slider("Temperature (T)", 0.1, 2.0, 1.0, step=0.1)
+        top_p = st.slider("Top-p", 0.1, 1.0, 0.9, step=0.05)
+        sample_count = st.slider(
+            "Sample count", 1, 20, 1,
+            help="Forecast paths generated and averaged. More samples = "
+                 "smoother prediction, but proportionally slower.",
+        )
+    else:
+        temperature, top_p, sample_count = 1.0, 0.9, 1
 
     run = st.button("🚀 Predict", type="primary", width="stretch")
 
@@ -140,7 +166,7 @@ if not run:
                     width="stretch")
     st.stop()
 
-with st.spinner(f"Loading Kronos-{model_name} model (first run downloads from HuggingFace)…"):
+with st.spinner(f"Loading {model_label(model_name)} model (first run downloads from HuggingFace)…"):
     logger.info("Predictor requested: model=%s device=%s", model_name, device)
     try:
         predictor = get_predictor(model_name, device)
@@ -154,6 +180,7 @@ if mode == "Forecast":
             pred_df = forecast(
                 predictor, df, interval,
                 pred_len=pred_len, lookback=lookback,
+                verbose=True,
                 temperature=temperature, top_p=top_p, sample_count=sample_count,
             )
         except Exception as e:
@@ -162,7 +189,7 @@ if mode == "Forecast":
 
     st.plotly_chart(
         forecast_figure(df.tail(lookback), pred_df,
-                        title=f"{ticker} · {interval} · Kronos-{model_name}"),
+                        title=f"{ticker} · {interval} · {model_label(model_name)}"),
         width="stretch",
     )
     st.subheader("Predicted candles")
@@ -180,6 +207,7 @@ else:  # Backtest
             pred_df, actual_df = backtest(
                 predictor, df, interval,
                 pred_len=pred_len, lookback=lookback,
+                verbose=True,
                 temperature=temperature, top_p=top_p, sample_count=sample_count,
             )
         except Exception as e:
@@ -198,7 +226,7 @@ else:  # Backtest
 
     st.plotly_chart(
         backtest_figure(context_df, actual_df, pred_df,
-                        title=f"{ticker} · {interval} · backtest Kronos-{model_name}"),
+                        title=f"{ticker} · {interval} · backtest {model_label(model_name)}"),
         width="stretch",
     )
 

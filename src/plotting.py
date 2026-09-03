@@ -54,27 +54,37 @@ def _to_indexed(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def forecast_figure(hist_df: pd.DataFrame, pred_df: pd.DataFrame,
-                    title: str = "Forecast") -> go.Figure:
-    """Historical candles + predicted candles (in red)."""
-    hist = _to_indexed(hist_df)
-    pred = _to_indexed(pred_df)
-
-    fig = make_subplots(
+def _new_figure(title: str) -> go.Figure:
+    """Creates the shared two-row (price + volume) subplot figure."""
+    return make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
         row_heights=[0.75, 0.25], subplot_titles=(title, "Volume"),
     )
-    _add_candlestick(fig, hist, "History", row=1)
-    _add_candlestick(fig, pred, "Prediction", row=1, increasing_color=COLOR_PRED)
-    _add_volume(fig, hist, "Hist. volume", COLOR_HIST, row=2)
-    _add_volume(fig, pred, "Pred. volume", COLOR_PRED, row=2)
 
+
+def _finalize_layout(fig: go.Figure) -> go.Figure:
+    """Applies the shared layout (size, legend, margins) and returns the figure."""
     fig.update_layout(
         height=700, xaxis_rangeslider_visible=False,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
         margin=dict(l=40, r=20, t=60, b=40),
     )
     return fig
+
+
+def forecast_figure(hist_df: pd.DataFrame, pred_df: pd.DataFrame,
+                    title: str = "Forecast") -> go.Figure:
+    """Historical candles + predicted candles (in red)."""
+    hist = _to_indexed(hist_df)
+    pred = _to_indexed(pred_df)
+
+    fig = _new_figure(title)
+    _add_candlestick(fig, hist, "History", row=1)
+    _add_candlestick(fig, pred, "Prediction", row=1, increasing_color=COLOR_PRED)
+    _add_volume(fig, hist, "Hist. volume", COLOR_HIST, row=2)
+    _add_volume(fig, pred, "Pred. volume", COLOR_PRED, row=2)
+
+    return _finalize_layout(fig)
 
 
 def backtest_figure(context_df: pd.DataFrame, actual_df: pd.DataFrame,
@@ -84,10 +94,7 @@ def backtest_figure(context_df: pd.DataFrame, actual_df: pd.DataFrame,
     actual = _to_indexed(actual_df)
     pred = _to_indexed(pred_df)
 
-    fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03,
-        row_heights=[0.75, 0.25], subplot_titles=(title, "Volume"),
-    )
+    fig = _new_figure(title)
     _add_candlestick(fig, context, "Context", row=1)
     _add_candlestick(fig, actual, "Actual", row=1, increasing_color=COLOR_REAL)
     _add_candlestick(fig, pred, "Prediction", row=1, increasing_color=COLOR_PRED)
@@ -95,9 +102,4 @@ def backtest_figure(context_df: pd.DataFrame, actual_df: pd.DataFrame,
     _add_volume(fig, actual, "Actual volume", COLOR_REAL, row=2)
     _add_volume(fig, pred, "Pred. volume", COLOR_PRED, row=2)
 
-    fig.update_layout(
-        height=700, xaxis_rangeslider_visible=False,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        margin=dict(l=40, r=20, t=60, b=40),
-    )
-    return fig
+    return _finalize_layout(fig)

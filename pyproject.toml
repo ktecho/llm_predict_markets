@@ -1,14 +1,20 @@
 [project]
-name = "kronos-predict"
-version = "0.1.0"
-description = "Price prediction with Kronos (financial K-line foundation model) + Yahoo Finance"
-requires-python = ">=3.11,<3.13"
+name = "timesfm-predict"
+version = "0.3.0"
+description = "Price prediction with TimesFM, Moirai, Kronos and Chronos-2 (time-series foundation models) + Yahoo Finance"
+# 3.11 only: the NVIDIA CUDA torch wheelhouse (torch 2.2.x / cu124) only
+# resolves cleanly for CPython 3.11.
+requires-python = ">=3.11,<3.12"
 dependencies = [
     "numpy",
     "pandas>=2.2,<2.4",
-    "torch>=2.2",
-    "einops==0.8.1",
-    "huggingface_hub>=0.33,<1.0",
+    "torch>=2.2,<2.5",
+    "einops==0.7.0",
+    "timesfm>=3.0.1,<4",
+    "uni2ts>=2.0,<3",
+    "chronos-forecasting>=2.0,<3",
+    "transformers>=4.41,<5",  # chronos-forecasting allows v5, but v5 needs torch>=2.5
+    "huggingface_hub>=0.33,<2.0",
     "safetensors>=0.6",
     "tqdm>=4.67",
     "yfinance>=0.2.50",
@@ -25,11 +31,27 @@ dev = [
 pythonpath = ["."]
 testpaths = ["tests"]
 
-# CPU-only torch: avoids downloading several GB of CUDA libraries
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-explicit = true
+[tool.uv]
+# Take the best version of each package across all configured indexes (PyPI plus
+# any CUDA wheelhouse uncommented below). Only matters while the CUDA index
+# below is enabled; harmless otherwise.
+index-strategy = "unsafe-best-match"
 
-[tool.uv.sources]
-torch = { index = "pytorch-cpu" }
+# ============================================================================
+# DEFAULT: CPU-only torch from PyPI. This is the active configuration.
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# NVIDIA GPU build of torch (cu124) to accelerate inference. The torch pin is
+# <2.5 (forced by uni2ts/lightning), so cu124 is required: cu126/cu13x wheels
+# only exist for torch >= 2.6. Uncomment to switch to CUDA, then recreate the
+# environment (`uv sync --python 3.11 --reinstall-package torch`).
+# ----------------------------------------------------------------------------
+#[[tool.uv.index]]
+#name = "pytorch-cu124"
+#url = "https://download.pytorch.org/whl/cu124"
+#explicit = true
+#
+#[tool.uv.sources]
+#torch = { index = "pytorch-cu124" }
+
